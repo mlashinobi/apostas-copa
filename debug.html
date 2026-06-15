@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Debug Firebase V4</title><link rel="stylesheet" href="styles.css"></head>
+<body>
+  <main class="content" style="max-width:920px;margin:auto">
+    <div class="card"><span class="badge">Debug V4</span><h1>Diagnóstico do Bolão</h1><p>Esta página usa scripts normais, sem type="module". Se ela abrir, app.js não deve dar erro de import/export.</p><button class="primary-btn" id="runBtn">Rodar diagnóstico</button></div>
+    <div class="card" style="margin-top:18px"><h3>Resultado</h3><pre id="out" style="white-space:pre-wrap;line-height:1.6;color:var(--text)">Aguardando...</pre></div>
+  </main>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
+  <script src="firebase-config.js"></script>
+  <script>
+    const out = document.getElementById('out');
+    const log = msg => out.textContent += '\n' + msg;
+    const hasConfig = () => window.firebaseConfig && !Object.values(window.firebaseConfig).some(v => String(v).includes('COLE_AQUI'));
+    document.getElementById('runBtn').onclick = async () => {
+      out.textContent = 'Iniciando...';
+      try {
+        log(hasConfig() ? '✅ firebase-config.js preenchido.' : '❌ firebase-config.js ainda tem COLE_AQUI.');
+        if (!hasConfig()) return;
+        firebase.initializeApp(window.firebaseConfig);
+        log('✅ Firebase inicializou.');
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        log('Auth domain: ' + auth.app.options.authDomain);
+        const snap = await db.collection('matches').limit(1).get();
+        log('✅ Firestore respondeu. Docs de jogos encontrados no teste: ' + snap.size);
+        log('\nSe chegou aqui, o problema principal não é app.js.');
+      } catch (e) {
+        log('❌ ERRO: ' + (e.code || e.message));
+        log('Mensagem: ' + e.message);
+        log('\nCausas prováveis: config errada, Firestore não criado, regras não publicadas, domínio não autorizado ou Email/Password desativado.');
+      }
+    };
+  </script>
+</body>
+</html>
