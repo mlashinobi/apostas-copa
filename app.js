@@ -18,7 +18,29 @@ let state = { user:null, profile:null, users:[], matches:[], bets:[], loading:fa
 const $ = (selector, root=document) => root.querySelector(selector);
 const $$ = (selector, root=document) => Array.from(root.querySelectorAll(selector));
 const uid = (prefix="id") => `${prefix}-${Math.random().toString(36).slice(2,10)}`;
-const hasConfig = () => window.firebaseConfig && !Object.values(window.firebaseConfig).some(v => String(v).includes("COLE_AQUI")) && window.firebaseConfig.apiKey && window.firebaseConfig.projectId;
+function hasConfig() {
+  const config = window.firebaseConfig;
+
+  if (!config) return false;
+
+  const requiredFields = [
+    "apiKey",
+    "authDomain",
+    "projectId",
+    "appId"
+  ];
+
+  return requiredFields.every((field) => {
+    const value = config[field];
+
+    return (
+      value &&
+      typeof value === "string" &&
+      value.trim() !== "" &&
+      !value.includes("COLE_AQUI")
+    );
+  });
+}
 const stamp = () => fieldValue.serverTimestamp();
 
 function escapeHtml(value="") { return String(value).replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#039;",'"':"&quot;"}[c])); }
@@ -36,17 +58,56 @@ function getUserBet(uid, matchId) { return state.bets.find(b => b.userId === uid
 
 function toast(message) { console.warn("Bolão:", message); const box = $("#toast"); if (!box) return; box.textContent = message; box.classList.add("show"); clearTimeout(box.timeout); box.timeout = setTimeout(() => box.classList.remove("show"), 3200); }
 function errorMsg(error) {
-  const code = error && (error.code || error.message) || "";
+  const code = error && error.code ? error.code : "";
+  const message = error && error.message ? error.message : "";
+
   const map = {
-    "auth/operation-not-allowed":"Ative Email/Password no Firebase Authentication.",
-    "auth/unauthorized-domain":"Domínio não autorizado. Adicione seu domínio em Authentication > Settings > Authorized domains.",
-    "auth/invalid-credential":"Email ou senha incorretos.",
-    "auth/email-already-in-use":"Este email já está cadastrado.",
-    "auth/weak-password":"Senha fraca. Use pelo menos 6 caracteres.",
-    "permission-denied":"Permissão negada. Publique firestore.rules e confira se você é admin.",
-    "Firebase: Error (auth/invalid-api-key).":"API key inválida. Confira firebase-config.js."
+    "auth/operation-not-allowed":
+      "Login por Email/Senha não está ativado. Vá em Firebase > Authentication > Sign-in method > Email/Password e ative.",
+
+    "auth/unauthorized-domain":
+      "Domínio não autorizado. Vá em Firebase > Authentication > Settings > Authorized domains e adicione o domínio do GitHub Pages.",
+
+    "auth/invalid-credential":
+      "Email ou senha incorretos. Se a conta ainda não existe, use Cadastro primeiro.",
+
+    "auth/user-not-found":
+      "Conta não encontrada. Use Cadastro primeiro.",
+
+    "auth/wrong-password":
+      "Senha incorreta.",
+
+    "auth/email-already-in-use":
+      "Este email já está cadastrado. Use Login em vez de Cadastro.",
+
+    "auth/weak-password":
+      "Senha fraca. Use pelo menos 6 caracteres.",
+
+    "auth/invalid-email":
+      "Email inválido.",
+
+    "auth/api-key-not-valid.-please-pass-a-valid-api-key.":
+      "API key inválida. Confira o firebase-config.js.",
+
+    "permission-denied":
+      "Permissão negada. Publique o arquivo firestore.rules no Firestore e confira se sua conta é admin."
   };
-  return map[code] || (error && error.message) || String(error) || "Erro desconhecido.";
+
+  if (map[code]) return map[code];
+
+  if (message.includes("auth/operation-not-allowed")) {
+    return "Login por Email/Senha não está ativado no Firebase Authentication.";
+  }
+
+  if (message.includes("auth/unauthorized-domain")) {
+    return "Domínio não autorizado no Firebase Authentication.";
+  }
+
+  if (message.includes("permission-denied")) {
+    return "Permissão negada no Firestore. Confira as regras.";
+  }
+
+  return message || "Erro desconhecido no Firebase.";
 }
 function setLastError(error) { state.lastError = errorMsg(error); console.error(error); toast(state.lastError); renderCurrentView(); }
 function renderErrorCard() { return state.lastError ? `<div class="card" style="margin-bottom:18px;border-color:rgba(255,92,124,.45)"><span class="badge" style="color:#ffb5c3;border-color:rgba(255,92,124,.35);background:rgba(255,92,124,.12)">Erro detectado</span><h3 style="margin-top:12px">Erro no Firebase/App</h3><p><strong>${escapeHtml(state.lastError)}</strong></p><p>Confira: firebase-config.js, Email/Password, Firestore Database, regras publicadas e domínio autorizado.</p></div>` : ""; }
@@ -114,15 +175,126 @@ async function seedDemoMatches() { try { const batch = db.batch(); DEFAULT_MATCH
 async function ensureProfile(user) { const ref = db.collection("users").doc(user.uid); const snap = await ref.get(); if (!snap.exists) { const profile = {name:user.displayName || (user.email||"Jogador").split("@")[0], email:user.email||"", role:"player", createdAt:stamp(), updatedAt:stamp()}; await ref.set(profile); return {id:user.uid, ...profile}; } return {id:snap.id, ...snap.data()}; }
 function clearSubscriptions() { unsubscribers.forEach(u=>u()); unsubscribers = []; }
 function subscribeData() { clearSubscriptions(); state.loading = true; renderCurrentView(); unsubscribers.push(db.collection("users").onSnapshot(snap=>{ state.users = snap.docs.map(d=>({id:d.id,...d.data()})); state.profile = state.users.find(u=>u.id===state.user?.uid) || state.profile; state.loading=false; renderCurrentView(); }, setLastError)); unsubscribers.push(db.collection("matches").onSnapshot(snap=>{ state.matches = snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>String(a.kickoff||"").localeCompare(String(b.kickoff||""))); state.loading=false; renderCurrentView(); }, setLastError)); unsubscribers.push(db.collection("bets").onSnapshot(snap=>{ state.bets = snap.docs.map(d=>({id:d.id,...d.data()})); state.loading=false; renderCurrentView(); }, setLastError)); }
-async function handleLogin(e) { e.preventDefault(); const d=new FormData(e.currentTarget); try { await auth.signInWithEmailAndPassword(d.get("email"), d.get("password")); closeAuthModal(); toast("Login feito."); } catch(err){ setLastError(err); } }
-async function handleRegister(e) { e.preventDefault(); const d=new FormData(e.currentTarget); try { const cred = await auth.createUserWithEmailAndPassword(d.get("email"), d.get("password")); await cred.user.updateProfile({displayName:d.get("name").trim()}); await db.collection("users").doc(cred.user.uid).set({name:d.get("name").trim(), email:d.get("email").trim(), role:"player", createdAt:stamp(), updatedAt:stamp()}); closeAuthModal(); toast("Conta criada."); } catch(err){ setLastError(err); } }
+async function handleLogin(e) {
+  e.preventDefault();
+
+  if (!auth) {
+    setLastError("Auth ainda não iniciou. Confira o firebase-config.js.");
+    return;
+  }
+
+  const d = new FormData(e.currentTarget);
+  const email = String(d.get("email")).trim();
+  const password = String(d.get("password"));
+
+  if (!email || !password) {
+    toast("Preencha email e senha.");
+    return;
+  }
+
+  try {
+    await auth.signInWithEmailAndPassword(email, password);
+    closeAuthModal();
+    toast("Login feito.");
+  } catch (err) {
+    setLastError(err);
+  }
+}
+async function handleRegister(e) {
+  e.preventDefault();
+
+  if (!auth || !db) {
+    setLastError("Firebase ainda não iniciou. Confira o firebase-config.js.");
+    return;
+  }
+
+  const d = new FormData(e.currentTarget);
+
+  const name = String(d.get("name")).trim();
+  const email = String(d.get("email")).trim();
+  const password = String(d.get("password"));
+
+  if (!name || !email || !password) {
+    toast("Preencha todos os campos.");
+    return;
+  }
+
+  try {
+    const cred = await auth.createUserWithEmailAndPassword(email, password);
+
+    await cred.user.updateProfile({
+      displayName: name
+    });
+
+    await db.collection("users").doc(cred.user.uid).set({
+      name: name,
+      email: email,
+      role: "player",
+      createdAt: stamp(),
+      updatedAt: stamp()
+    });
+
+    closeAuthModal();
+    toast("Conta criada.");
+  } catch (err) {
+    setLastError(err);
+  }
+}
 async function logout(){ try { await auth.signOut(); toast("Saiu."); } catch(err){ setLastError(err); } }
 function openAuthModal(){ $("#authModal").classList.remove("hidden"); }
 function closeAuthModal(){ $("#authModal").classList.add("hidden"); }
 function initTheme(){ const t=localStorage.getItem(THEME_KEY)||"dark"; document.documentElement.dataset.theme=t; $("#themeBtn").textContent=t==="dark"?"🌙":"☀️"; }
 function toggleTheme(){ const next=(document.documentElement.dataset.theme||"dark")==="dark"?"light":"dark"; document.documentElement.dataset.theme=next; localStorage.setItem(THEME_KEY,next); $("#themeBtn").textContent=next==="dark"?"🌙":"☀️"; }
 function bindEvents(){ $$(".nav-item").forEach(i=>i.addEventListener("click",()=>setView(i.dataset.view))); $("#openAuthBtn").addEventListener("click",openAuthModal); $("#heroAuthBtn").addEventListener("click",openAuthModal); $("#logoutBtn").addEventListener("click",logout); $("#menuBtn").addEventListener("click",()=>$("#sidebar").classList.toggle("open")); $("#themeBtn").addEventListener("click",toggleTheme); $$("[data-close='auth']").forEach(i=>i.addEventListener("click",closeAuthModal)); $("#loginForm").addEventListener("submit",handleLogin); $("#registerForm").addEventListener("submit",handleRegister); $$("[data-auth-tab]").forEach(tab=>tab.addEventListener("click",()=>{ $$("[data-auth-tab]").forEach(x=>x.classList.remove("active")); tab.classList.add("active"); const mode=tab.dataset.authTab; $("#loginForm").classList.toggle("hidden",mode!=="login"); $("#registerForm").classList.toggle("hidden",mode!=="register"); })); }
-function initFirebase(){ if (!hasConfig()) { showAppState(); return; } try { firebase.initializeApp(window.firebaseConfig); auth = firebase.auth(); db = firebase.firestore(); fieldValue = firebase.firestore.FieldValue; auth.onAuthStateChanged(async user => { clearSubscriptions(); state.user=user; state.profile=null; state.users=[]; state.matches=[]; state.bets=[]; state.lastError=null; if (!user) { state.loading=false; showAppState(); return; } try { state.profile = await ensureProfile(user); subscribeData(); setView(currentView); } catch(err){ state.loading=false; setLastError(err); } }); } catch(err){ setLastError(err); } }
+function initFirebase() {
+  try {
+    if (!hasConfig()) {
+      showAppState();
+      return;
+    }
+
+    if (!window.firebase) {
+      setLastError("Firebase SDK não carregou. Confira os scripts do Firebase no index.html.");
+      return;
+    }
+
+    if (!firebase.apps.length) {
+      firebase.initializeApp(window.firebaseConfig);
+    }
+
+    auth = firebase.auth();
+    db = firebase.firestore();
+    fieldValue = firebase.firestore.FieldValue;
+
+    auth.onAuthStateChanged(async (user) => {
+      clearSubscriptions();
+
+      state.user = user;
+      state.profile = null;
+      state.users = [];
+      state.matches = [];
+      state.bets = [];
+      state.lastError = null;
+
+      if (!user) {
+        state.loading = false;
+        showAppState();
+        return;
+      }
+
+      try {
+        state.profile = await ensureProfile(user);
+        subscribeData();
+        setView(currentView);
+      } catch (err) {
+        state.loading = false;
+        setLastError(err);
+      }
+    });
+  } catch (err) {
+    setLastError(err);
+  }
+}
 window.addEventListener("error", e => setLastError(e.message));
 window.addEventListener("unhandledrejection", e => setLastError(e.reason || "Erro no app.js"));
 window.setView = setView;
